@@ -7,14 +7,23 @@ from spotipy.oauth2 import SpotifyOAuth
 load_dotenv()
 
 
-def get_all_saved_tacks():
+def get_all_saved_tacks() -> pd.DataFrame | None:
+    """
+    Retrieves all tracks from users "liked songs"
+
+    :return: DataFrame containing all saved tracks data
+    :rtype: DataFrame | None
+    """
     scope = "user-library-read"
     sp = spotipy.Spotify(auth_manager=SpotifyOAuth(scope=scope))
 
     results = sp.current_user_saved_tracks(limit=50)
+    if results is None:
+        print("Error retrieving all saved tracks")
+        return None
     tracks = []
 
-    while results["next"]:
+    while results and results["next"]:
         for item in results["items"]:
             tracks.append(item["track"])
 
@@ -30,7 +39,13 @@ def get_all_saved_tacks():
     return tracks_df
 
 
-def get_all_playlists():
+def get_all_playlists() -> pd.DataFrame | None:
+    """
+    Retrieves all playlists created/saved by user
+
+    :return: Dataframe containing all playlists data
+    :rtype: DataFrame | None
+    """
     scope = [
         "user-library-read",
         "playlist-read-collaborative",
@@ -39,6 +54,9 @@ def get_all_playlists():
     sp = spotipy.Spotify(auth_manager=SpotifyOAuth(scope=scope))
 
     results = sp.current_user_playlists(limit=50)
+    if results is None:
+        print("Error retrieving all playlists")
+        return None
     playlists = []
 
     while results["next"]:
