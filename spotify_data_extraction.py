@@ -79,6 +79,28 @@ def get_all_playlists() -> pd.DataFrame | None:
     return playlists_df
 
 
+def get_all_playlist_songs(playlists: pd.DataFrame) -> pd.DataFrame | None:
+    scope = [
+        "user-library-read",
+        "playlist-read-collaborative",
+        "playlist-read-private",
+    ]
+    sp = spotipy.Spotify(auth_manager=SpotifyOAuth(scope=scope))
+    tracks = []
+    for row in playlists.itertuples():
+        results = sp.playlist_tracks(row.id, limit=100)
+        while results:
+            tracks.extend(results["items"])
+            if results["next"]:
+                results = sp.next(results)
+            else:
+                break
+
+    tracks_df = pd.DataFrame(tracks)
+    return tracks_df
+
+
 if __name__ == "__main__":
-    get_all_saved_tacks()
-    get_all_playlists()
+    # get_all_saved_tacks()
+    playlists = get_all_playlists()
+    get_all_playlist_songs(playlists)
