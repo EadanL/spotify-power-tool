@@ -1,3 +1,4 @@
 pandas==2.3.3
 python-dotenv==1.2.1
 spotipy==2.25.2
+duckdb==1.4.3
