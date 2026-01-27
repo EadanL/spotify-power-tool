@@ -10,9 +10,20 @@ from motherduck_loader import DataFrameLoadingBuffer
 load_dotenv()
 
 
-# TODO: Explicitly define table schemas (maybe in a different file tho)
-# TODO: Insert all dfs into db
 def spotify_etl():
+    """
+    Main ETL pipeline for extracting Spotify data and loading it into MotherDuck.
+
+    This function orchestrates the entire ETL process:
+    1. Retrieves all saved tracks from user's "liked songs"
+    2. Fetches all user-created playlists and their tracks
+    3. Combines and deduplicates track data
+    4. Splits normalized data into separate tables (tracks, albums, artists, playlist_tracks)
+    5. Loads all data into MotherDuck database
+
+    :raises ValueError: If MOTHERDUCK_TOKEN environment variable is not set
+    :raises spotipy.SpotifyException: If Spotify API calls fail
+    """
     logging.info("Retrieving all tracks from users 'liked songs'...")
     liked_tracks = get_all_saved_tacks()
     logging.info("Retrieving all playlists and playlist tracks...")
@@ -49,10 +60,14 @@ def spotify_etl():
 
 def get_all_saved_tacks() -> pd.DataFrame | None:
     """
-    Retrieves all tracks from users "liked songs"
+    Retrieves all tracks from user's "liked songs" library.
 
-    :return: DataFrame containing all saved tracks data
-    :rtype: DataFrame | None
+    Fetches tracks in batches of 50 and continues paginating through all results.
+    Removes unnecessary columns like disc_number, preview_url, type, is_local, and is_playable.
+    Adds a 'liked' column set to True for all retrieved tracks.
+
+    :return: DataFrame with track data indexed by track ID, or None if retrieval fails
+    :rtype: pd.DataFrame | None
     """
     scope = "user-library-read"
     sp = spotipy.Spotify(auth_manager=SpotifyOAuth(scope=scope))
@@ -85,10 +100,16 @@ def get_all_saved_tacks() -> pd.DataFrame | None:
 
 def get_all_playlists(sp: spotipy.Spotify) -> pd.DataFrame | None:
     """
-    Retrieves all playlists created/saved by user
+    Retrieves all playlists created by the authenticated user.
 
-    :return: Dataframe containing all playlists data
-    :rtype: DataFrame | None
+    Filters playlists to only include those owned by the current user (excludes followed playlists).
+    Fetches playlists in batches of 50 and paginates through all results.
+    Removes unnecessary columns like images, primary_color, snapshot_id, and type.
+
+    :param sp: Authenticated Spotify client instance
+    :type sp: spotipy.Spotify
+    :return: DataFrame with playlist data indexed by playlist ID, or None if retrieval fails
+    :rtype: pd.DataFrame | None
     """
 
     # Get current user's ID
@@ -123,13 +144,19 @@ def get_all_playlists(sp: spotipy.Spotify) -> pd.DataFrame | None:
     return playlists_df
 
 
-# TODO: Fill in docstring
 def get_playlists_and_tracks() -> tuple[pd.DataFrame]:
     """
-    Extracts all tracks from all playlists owned by user.
+    Extracts all playlists and their associated tracks for the authenticated user.
 
-    :return:
-    :rtype: tuple[DataFrame]
+    Creates a new Spotify client with playlist read scopes and retrieves all playlists
+    created by the user. For each playlist, fetches all tracks in batches of 100,
+    associating each track with its playlist_id. Cleans playlist data by removing
+    unnecessary columns (tracks, owner, uri).
+
+    :return: Tuple containing (playlists_df, playlist_tracks_df) where:
+             - playlists_df: DataFrame of playlist metadata indexed by playlist ID
+             - playlist_tracks_df: DataFrame of raw track data with playlist_id associations
+    :rtype: tuple[pd.DataFrame, pd.DataFrame]
     """
     scope = [
         "user-library-read",
@@ -160,8 +187,21 @@ def get_playlists_and_tracks() -> tuple[pd.DataFrame]:
     return playlists, playlist_tracks
 
 
-# TODO: Fill in docstring
 def split_playlist_track_data(playlist_tracks: pd.DataFrame) -> tuple[pd.DataFrame]:
+    """
+    Separates playlist track data into junction table and normalized track data.
+
+    Extracts track IDs from nested track objects and creates a junction table
+    mapping playlists to tracks (with added_at and added_by metadata).
+    Expands nested track objects into flat track records and removes unnecessary columns.
+
+    :param playlist_tracks: Raw DataFrame containing nested track objects and playlist metadata
+    :type playlist_tracks: pd.DataFrame
+    :return: Tuple containing (playlist_tracks_df, playlist_track_junction_df) where:
+             - playlist_tracks_df: Normalized track data indexed by track ID
+             - playlist_track_junction_df: Many-to-many relationship between playlists and tracks
+    :rtype: tuple[pd.DataFrame, pd.DataFrame]
+    """
     # Extract track_id from nested track object to top level
     playlist_tracks["track_id"] = playlist_tracks["track"].apply(
         lambda x: x.get("id") if isinstance(x, dict) else None
@@ -185,8 +225,22 @@ def split_playlist_track_data(playlist_tracks: pd.DataFrame) -> tuple[pd.DataFra
     return playlist_tracks, playlist_track_junction
 
 
-# TODO: Fill in docstring
 def split_track_album_artist(tracks: pd.DataFrame) -> tuple[pd.DataFrame]:
+    """
+    Normalizes track data by splitting into separate tracks, albums, and artists tables.
+
+    Creates three normalized DataFrames:
+    1. Albums: Extracts and deduplicates album information from tracks
+    2. Artists: Explodes artist arrays and deduplicates artist information
+    3. Tracks: Keeps track metadata with foreign keys to albums (album_id) and artists (artist_ids array)
+
+    Also extracts Spotify URLs from external_urls objects for tracks and albums.
+
+    :param tracks: Combined DataFrame containing all track data with nested album and artist objects
+    :type tracks: pd.DataFrame
+    :return: Tuple containing (tracks_df, albums_df, artists_df) with normalized data
+    :rtype: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
+    """
     # Create albums DataFrame
     albums = tracks["album"].apply(pd.Series)  # flatten dictionary structure
     albums = albums.drop(
