@@ -8,19 +8,17 @@ from dotenv import load_dotenv
 class DataFrameLoadingBuffer:
     def __init__(
         self,
-        duckdb_schema: str,
         database_name: str,
         table_name: str,
         chunk_size: int = 100_00,
     ):
-        self.duckdb_schema = duckdb_schema
         self.database_name = database_name
         self.table_name = table_name
         self.chunk_size = chunk_size
-        self.conn = self.initialize_connection(duckdb_schema)
+        self.conn = self.initialize_connection()
         self.total_inserted = 0
 
-    def initialize_connection(self, sql):
+    def initialize_connection(self):
         logging.info("Connecting to MotherDuck...")
         motherduck_token = os.environ.get("MOTHERDUCK_TOKEN")
         if not motherduck_token:
@@ -31,9 +29,10 @@ class DataFrameLoadingBuffer:
         logging.info(f"Creating database {self.database_name} if it doesn't exist")
         conn.execute(f"CREATE DATABASE IF NOT EXISTS {self.database_name}")
         conn.execute(f"USE {self.database_name}")
-        conn.execute("SET GLOBAL pandas_analyze_sample=1000")
-        # conn.execute(sql) // until I fix the explicit schema definition use the auto detect
         return conn
+
+    def apply_table_schema(self, schema_sql):
+        self.conn.execute(schema_sql)
 
     def insert(self, table):
         total_rows = len(table)
