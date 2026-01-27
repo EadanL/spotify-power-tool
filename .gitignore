@@ -2,3 +2,5 @@
 .env
 .cache
 *.cache
+*.csv
+__pycache__
