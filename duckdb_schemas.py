@@ -15,20 +15,28 @@ track_schema = (
     ")"
 )
 
-playlist_schema = (
+playlists_schema = (
+    "CREATE TABLE IF NOT EXISTS playlists "
+    "("
     "collaborative BOOLEAN, "
     "description VARCHAR, "
     "external_urls VARCHAR, "
     "name VARCHAR, "
     "public BOOLEAN, "
+    ")"
 )
 
 playlist_track_junction = (
+    "CREATE TABLE IF NOT EXISTS playlist_track_junction "
+    "("
     "playlist_id VARCHAR, track_id VARCHAR, added_at DATE, added_by VARCHAR"
+    ")"
 )
 
 
 albums_schema = (
+    "CREATE TABLE IF NOT EXISTS albums "
+    "("
     "id VARCHAR PRIMARY KEY, "
     "name VARCHAR, "
     "artists VARCHAR[], "
@@ -36,6 +44,12 @@ albums_schema = (
     "external_urls VARCHAR, "
     "release_date DATE, "
     "total_tracks INTEGER,"
+    ")"
 )
 
-artists_schema = "id VARCHAR PRIMARY KEY, name VARCHAR, external_urls VARCHAR,"
+artists_schema = (
+    "CREATE TABLE IF NOT EXISTS artists"
+    "("
+    "id VARCHAR PRIMARY KEY, name VARCHAR, external_urls VARCHAR,"
+    ")"
+)
