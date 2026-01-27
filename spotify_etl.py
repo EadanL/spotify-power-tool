@@ -1,21 +1,75 @@
-import os
+import logging
+
 import pandas as pd
-from dotenv import load_dotenv
 import spotipy
+from dotenv import load_dotenv
 from spotipy.oauth2 import SpotifyOAuth
+
+from motherduck_loader import DataFrameLoadingBuffer
 
 load_dotenv()
 
 
+# TODO: Refactor this function to be cleaner (create data cleaning functions)
+# TODO: Maybe create an albums and artists table
+
+# TODO: Explicitly define table schemas (maybe in a different file tho)
+
+
+# TODO: Insert playlist df into db
+# TODO: Insert junction df into db
 def spotify_etl():
+    logging.info("Retrieving all tracks from users 'liked songs'...")
     liked_tracks = get_all_saved_tacks()
-    playlists = get_all_playlists()
-    playlist_tracks, playlists_cleaned, playlist_track_junction = (
-        get_all_playlist_songs(playlists)
+    logging.info("Retrieving all playlists and playlist tracks...")
+    playlists, playlist_tracks = get_playlists_and_tracks()
+    logging.info("Splitting playlist tracks from playlist...")
+    playlist_tracks, playlist_track_junction = split_playlist_track_data(
+        playlist_tracks
     )
+
+    # Combine all tracks into master DataFrame
     tracks_master = pd.concat([liked_tracks, playlist_tracks], axis=0)
     tracks_master = tracks_master.loc[~tracks_master.index.duplicated(keep="first"), :]
-    print("done")
+    tracks_master = tracks_master.drop(columns=["track", "episode"])
+    tracks_master = tracks_master.reset_index()
+
+    logging.info("Splitting data into tracks, albums, artists tables...")
+    tracks, albums, artists = split_track_album_artist(tracks_master)
+
+    duck_track_schema = (
+        "CREATE TABLE IF NOT EXISTS tracks "
+        "("
+        "id VARCHAR PRIMARY KEY, "
+        "name VARCHAR, "
+        "artists STRUCT(id VARCHAR, name VARCHAR, uri VARCHAR, href VARCHAR)[], "
+        "album STRUCT(id VARCHAR, name VARCHAR, album_type VARCHAR, release_date VARCHAR, total_tracks INTEGER, uri VARCHAR, href VARCHAR, external_urls STRUCT(spotify VARCHAR), images STRUCT(url VARCHAR, height INTEGER, width INTEGER)[]), "
+        "track_number INTEGER, "
+        "duration_ms INTEGER, "
+        "popularity INTEGER, "
+        "explicit BOOLEAN, "
+        "available_markets VARCHAR[], "
+        "uri VARCHAR, "
+        "href VARCHAR, "
+        "external_urls VARCHAR, "
+        "external_ids STRUCT(isrc VARCHAR, ean VARCHAR, upc VARCHAR)"
+        ")"
+    )
+
+    # Load data into MotherDuck
+    loader = DataFrameLoadingBuffer(
+        duck_track_schema, "spotify_power_tools_raw", "tracks"
+    )
+    loader.insert(tracks)
+    loader.table_name("playlists")
+    loader.insert(playlists)
+    loader.table_name("albums")
+    loader.insert(albums)
+    loader.table_name("artists")
+    loader.insert(artists)
+    loader.table_name("playlist_tracks")
+    loader.insert(playlist_track_junction)
+    logging.info("Completed loading data into MotherDuck")
 
 
 def get_all_saved_tacks() -> pd.DataFrame | None:
@@ -53,19 +107,13 @@ def get_all_saved_tacks() -> pd.DataFrame | None:
     return tracks_df
 
 
-def get_all_playlists() -> pd.DataFrame | None:
+def get_all_playlists(sp: spotipy.Spotify) -> pd.DataFrame | None:
     """
     Retrieves all playlists created/saved by user
 
     :return: Dataframe containing all playlists data
     :rtype: DataFrame | None
     """
-    scope = [
-        "user-library-read",
-        "playlist-read-collaborative",
-        "playlist-read-private",
-    ]
-    sp = spotipy.Spotify(auth_manager=SpotifyOAuth(scope=scope))
 
     # Get current user's ID
     current_user = sp.current_user()
@@ -99,15 +147,24 @@ def get_all_playlists() -> pd.DataFrame | None:
     return playlists_df
 
 
-def get_all_playlist_songs(playlists: pd.DataFrame) -> pd.DataFrame | None:
+# TODO: Fill in docstring
+def get_playlists_and_tracks() -> tuple[pd.DataFrame]:
+    """
+    Extracts all tracks from all playlists owned by user.
+
+    :return:
+    :rtype: tuple[DataFrame]
+    """
     scope = [
         "user-library-read",
         "playlist-read-collaborative",
         "playlist-read-private",
     ]
     sp = spotipy.Spotify(auth_manager=SpotifyOAuth(scope=scope))
-    tracks = []
+    playlists = get_all_playlists(sp)
 
+    # Split tracks from playlists
+    tracks = []
     for row in playlists.itertuples():
         results = sp.playlist_tracks(row.Index, limit=100)
         while results:
@@ -121,17 +178,19 @@ def get_all_playlist_songs(playlists: pd.DataFrame) -> pd.DataFrame | None:
             else:
                 break
 
+    playlists = playlists.drop(columns=["tracks"])
     playlist_tracks = pd.DataFrame(tracks)
 
-    # Extract track_id from nested track object to top level
-    playlist_tracks["track_id"] = playlist_tracks["track"].apply(
-        lambda x: x.get("id") if isinstance(x, dict) else None
-    )
+    return playlists, playlist_tracks
 
+
+# TODO: Fill in docstring
+def split_playlist_track_data(playlist_tracks: pd.DataFrame) -> tuple[pd.DataFrame]:
     playlist_track_junction = playlist_tracks.drop(
         columns=["is_local", "primary_color", "track", "video_thumbnail"]
     )
 
+    # Expand playlist track data from playlist data
     playlist_tracks = playlist_tracks["track"].apply(pd.Series)
     playlist_tracks = playlist_tracks.set_index("id")
     playlist_tracks = playlist_tracks.drop(
@@ -139,9 +198,48 @@ def get_all_playlist_songs(playlists: pd.DataFrame) -> pd.DataFrame | None:
         axis=1,
     )
 
-    playlists = playlists.drop(columns=["tracks"])
+    return playlist_tracks, playlist_track_junction
 
-    return playlist_tracks, playlists, playlist_track_junction
+
+# TODO: Fill in docstring
+def split_track_album_artist(tracks: pd.DataFrame) -> tuple[pd.DataFrame]:
+    # Create albums DataFrame
+    albums = tracks["album"].apply(pd.Series)  # flatten dictionary structure
+    albums.drop(
+        columns=[
+            "is_playable",
+            "release_date_precision",
+            "type",
+        ]
+    )
+
+    # Create artists DataFrame
+    artists = tracks["artists"].copy()
+    artists = artists.explode("artists")  # give each list entry its own row
+    artists = pd.json_normalize(artists.tolist())  # flatten dictionary structure
+    artists = artists.rename(columns={"external_urls.spotify": "external_urls"})
+    artists = artists.drop(columns=["type"])
+
+    # Clean tracks DataFrame and leave album/artist IDs
+    tracks["album_id"] = tracks["album"].apply(
+        lambda x: x["id"] if isinstance(x, dict) else None
+    )
+    tracks["artist_ids"] = tracks["artists"].apply(
+        lambda x: [artist["id"] for artist in x] if isinstance(x, list) else None
+    )
+    tracks.drop(columns=["album", "artists"])
+
+    # Drop duplicates from all DataFrames
+    for df in [tracks, albums, artists]:
+        df = df.drop_duplicates(subset=["id"]).reset_index(drop=True)
+
+    # Extract Spotify URL from external_urls object
+    for df in [tracks, albums]:
+        df["external_urls"] = df["external_urls"].apply(
+            lambda x: x.get("spotify") if isinstance(x, dict) and pd.notna(x) else None
+        )
+
+    return tracks, albums, artists
 
 
 if __name__ == "__main__":
