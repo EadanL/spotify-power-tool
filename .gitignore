@@ -4,3 +4,5 @@
 *.cache
 *.csv
 __pycache__
+checkpoint.pkl
+dev_checkpoints.py

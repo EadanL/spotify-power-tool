@@ -46,8 +46,29 @@ class DataFrameLoadingBuffer:
 
     def insert_chunk(self, chunk):
         self.conn.register("buffer_table", chunk)
-        create = f"CREATE TABLE IF NOT EXISTS {self.table_name} AS SELECT * FROM buffer_table WHERE 1=0"
-        insert_query = f"INSERT INTO {self.table_name} SELECT * FROM buffer_table"
-        self.conn.execute(create)
+        # Get column names from the buffer table to match with target table
+        columns = ", ".join(chunk.columns)
+
+        # Determine conflict handling based on table type
+        if self.table_name in ["tracks", "albums", "artists", "playlists"]:
+            # Tables with id PRIMARY KEY - ignore on duplicate id
+            insert_query = f"INSERT OR IGNORE INTO {self.table_name} ({columns}) SELECT {columns} FROM buffer_table"
+        elif self.table_name == "playlist_track_junction":
+            # Junction table with composite PRIMARY KEY (playlist_id, track_id)
+            update_cols = ", ".join(
+                [
+                    f"{col} = EXCLUDED.{col}"
+                    for col in chunk.columns
+                    if col not in ["playlist_id", "track_id"]
+                ]
+            )
+            insert_query = f"INSERT INTO {self.table_name} ({columns}) SELECT {columns} FROM buffer_table ON CONFLICT (playlist_id, track_id) DO UPDATE SET {update_cols}"
+        else:
+            # Default case - just insert
+            insert_query = f"INSERT INTO {self.table_name} ({columns}) SELECT {columns} FROM buffer_table"
+
         self.conn.execute(insert_query)
         self.conn.unregister("buffer_table")
+
+    def set_table_name(self, table_name):
+        self.table_name = table_name
