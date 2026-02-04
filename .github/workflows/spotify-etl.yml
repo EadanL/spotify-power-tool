@@ -1,0 +1,33 @@
+name: Spotify to MotherDuck ETL
+
+on:
+    schedule:
+        - cron: '0 3 * * *' # Runs daily at 3am
+    workflow_dispatch:
+
+jobs:
+    extract-load:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: checkout code
+              uses: actions/checkout@v3
+
+            - name: Set up Python
+              uses: actions/setup-python@v4
+              with:
+                  python-version: '3.11'
+
+            - name: Install dependencies
+              run: |
+                  pip install -r requirements.txt
+
+            - name: Run ETL script
+              env:
+                  SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+                  SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+                  SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+                  SPOTIFY_REDIRECT_URI: ${{ secrets.SPOTIFY_REDIRECT_URI }}
+                  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+              run: |
+                  python spotify_etl.py
